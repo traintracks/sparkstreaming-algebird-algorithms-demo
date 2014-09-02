@@ -20,10 +20,7 @@ object AlgebirdExampleDemo {
   }
 
   def main(args: Array[String]) {
-    val log4jInitialized = Logger.getRootLogger.getAllAppenders.hasMoreElements
-    if (!log4jInitialized) {
-      Logger.getRootLogger.setLevel(Level.WARN)
-    }
+
     val master = "local[2]"
     // Create a StreamingContext with a local master
     val ssc = new StreamingContext(master, "AlgebirdExampleDemo", Seconds(4))
