@@ -15,7 +15,7 @@ object KafkaLogProducer extends App {
   val config = new ProducerConfig(props)
   val producer = new Producer[String, String](config)
   val messagesBatchSize = 100
-  val topic = "meetup"
+  val topic = "sparkmeetup"
 
   while (true) {
     val messages = (1 to messagesBatchSize).map { messageNum =>
