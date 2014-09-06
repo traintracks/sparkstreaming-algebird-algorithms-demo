@@ -42,7 +42,7 @@ object SparkMeetupDemo extends App {
   val smParams = SketchMapParams[String](seed, eps, delta, heavyHittersCount)
   implicit val smMonoid = SketchMap.monoid[String, Long](smParams)
   val smDStream = lines.map(id => (id, smMonoid.create((id, 1L))))
-  val smStateDStream = smDStream.updateStateByKey[SketchMap[String, Long]](accumulateMonoid[SketchMap[String, Long]])
+  val smStateDStream = smDStream.updateStateByKey[SketchMap[String, Long]](accumulateMonoid[SketchMap[String, Long]] _)
 
   val exactMapDStream = lines.map(id => (id, Map(id -> 1L)))
   val exactMapUpdateFunc = (values: Seq[Map[String, Long]], state: Option[Map[String,Long]]) => {
@@ -56,14 +56,14 @@ object SparkMeetupDemo extends App {
     if (rdd.count() != 0) {
       val partial = rdd.first()
       val topK = partial.toSeq.sortBy(_._2).reverse.slice(0, heavyHittersCount)
-      println(s"Exact heavyHitters: $topK\n")
+      println(s"Exact heavyHitters (video_id, view_count): $topK\n")
     }
   })
   smStateDStream.map(m => m._2).reduce(smMonoid.plus).foreachRDD(rdd => {
     if (rdd.count() != 0) {
       val partial = rdd.first()
       val heavyHitters = smMonoid.heavyHitters(partial)
-      println(s"SketchMap heavyHitters: $heavyHitters\n")
+      println(s"SketchMap heavyHitters (video_id, view_count): $heavyHitters\n")
     }
   }
   )
@@ -74,15 +74,15 @@ object SparkMeetupDemo extends App {
   val bits = 12
   implicit val hllMonoid = new HyperLogLogMonoid(bits)
   val hllDStream = lines.map(id => id -> hllMonoid(id.getBytes(Charsets.UTF_8)))
-  val hllStateDStream = hllDStream.updateStateByKey[HLL](accumulateMonoid[HLL])
+  val hllStateDStream = hllDStream.updateStateByKey[HLL](accumulateMonoid[HLL] _)
   val exactHLLDStream = lines.map(id => id -> Set(id))
-  val exactHLLStateDStream = exactHLLDStream.updateStateByKey[Set[String]](accumulateMonoid[Set[String]])
+  val exactHLLStateDStream = exactHLLDStream.updateStateByKey[Set[String]](accumulateMonoid[Set[String]] _)
 
   exactHLLStateDStream.map(m => m._2).reduce(_ union _).foreachRDD(rdd => {
     if (rdd.count() != 0) {
       val partial = rdd.first()
       val exactSize = partial.size
-      println(s"Exact Set Number: $exactSize\n")
+      println(s"Exact Set Number (user_count): $exactSize\n")
     }
   })
 
@@ -90,7 +90,7 @@ object SparkMeetupDemo extends App {
     if (rdd.count() != 0) {
       val partial = rdd.first()
       val approxSize = partial.estimatedSize.toLong
-      println(s"HyperLogLog Set approxSize: $approxSize\n\n===\n")
+      println(s"HyperLogLog Set approxSize (user_count): $approxSize\n\n===\n")
     }
   })
   hllStateDStream.checkpoint(Seconds(12))
