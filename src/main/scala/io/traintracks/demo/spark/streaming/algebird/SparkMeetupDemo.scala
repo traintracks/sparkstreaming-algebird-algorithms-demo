@@ -20,16 +20,15 @@ object SparkMeetupDemo extends App {
     "group.id" -> "test-consumer-group"
   )
   val topics = Map(
-    "sparkmeetup" -> 1
+    "demotopic" -> 1
   )
-  val monoidMap = new MapMonoid[String, Long]()
 
   val conf = new SparkConf()
   conf.setMaster(master)
   conf.setAppName("SparkMeetup")
   val ssc = new StreamingContext(conf, Seconds(4))
-  val lines = KafkaUtils.createStream(ssc, "localhost:2181", "sparkmeetup", topics).map(_._2)
-  ssc.checkpoint("sparkmeetup")
+  val lines = KafkaUtils.createStream(ssc, "localhost:2181", "demotopic", topics).map(_._2)
+  ssc.checkpoint("demotopic")
 
   implicit def string2Bytes(i: String) = i.toCharArray.map(_.toByte)
 
@@ -41,60 +40,57 @@ object SparkMeetupDemo extends App {
   val (seed, eps, delta, heavyHittersCount) = (1, 0.001, 1E-8, 5)
   val smParams = SketchMapParams[String](seed, eps, delta, heavyHittersCount)
   implicit val smMonoid = SketchMap.monoid[String, Long](smParams)
-  val smDStream = lines.map(id => (id, smMonoid.create((id, 1L))))
+  val smDStream = lines.map(id => smMonoid.create((id, 1L))).reduce(smMonoid.plus).map(sm => "key" -> sm)
   val smStateDStream = smDStream.updateStateByKey[SketchMap[String, Long]](accumulateMonoid[SketchMap[String, Long]] _)
-
-  val exactMapDStream = lines.map(id => (id, Map(id -> 1L)))
-  val exactMapUpdateFunc = (values: Seq[Map[String, Long]], state: Option[Map[String,Long]]) => {
-    val curValues = if (values.nonEmpty) values.reduce(monoidMap.plus) else Map[String,Long]()
+  val mapMonoid = new MapMonoid[String, Long]()
+  val exactMapDStream = lines.map(id => Map(id -> 1L)).reduce(mapMonoid.plus).map(map => "key" -> map)
+  val exactMapUpdateFunc = (values: Seq[Map[String, Long]], state: Option[Map[String, Long]]) => {
+    val curValues = if (values.nonEmpty) values.reduce(mapMonoid.plus) else Map[String, Long]()
     val preValues = state.getOrElse[Map[String, Long]](Map[String, Long]())
-    Some(monoidMap.plus(curValues, preValues))
+    Some(mapMonoid.plus(curValues, preValues))
   }
   val exactMapStateDStream = exactMapDStream.updateStateByKey[Map[String, Long]](exactMapUpdateFunc)
-
-  exactMapStateDStream.map(m => m._2).reduce(monoidMap.plus).foreachRDD(rdd => {
+  val joinedSMStateDStream = exactMapStateDStream.join(smStateDStream)
+  joinedSMStateDStream.foreachRDD(rdd => {
     if (rdd.count() != 0) {
-      val partial = rdd.first()
-      val topK = partial.toSeq.sortBy(_._2).reverse.slice(0, heavyHittersCount)
-      println(s"Exact heavyHitters (video_id, view_count): $topK\n")
+      val mapSM = rdd.first()._2
+      val map = mapSM._1
+      val sm = mapSM._2
+      val mapHH = map.toSeq.sortBy(_._2).reverse.slice(0, heavyHittersCount)
+      val smHH = smMonoid.heavyHitters(sm)
+      println(s"SketchMap heavyHitters (video_id, view_count): $smHH \n" +
+        s"Exact heavyHitters (video_id, view_count): $mapHH\n")
     }
   })
-  smStateDStream.map(m => m._2).reduce(smMonoid.plus).foreachRDD(rdd => {
-    if (rdd.count() != 0) {
-      val partial = rdd.first()
-      val heavyHitters = smMonoid.heavyHitters(partial)
-      println(s"SketchMap heavyHitters (video_id, view_count): $heavyHitters\n")
-    }
-  }
-  )
+  joinedSMStateDStream.checkpoint(Seconds(12))
   smStateDStream.checkpoint(Seconds(12))
   exactMapStateDStream.checkpoint(Seconds(12))
 
   // HyperLogLog
   val bits = 12
   implicit val hllMonoid = new HyperLogLogMonoid(bits)
-  val hllDStream = lines.map(id => id -> hllMonoid(id.getBytes(Charsets.UTF_8)))
+  val hllDStream = lines.map(id => hllMonoid(id.getBytes(Charsets.UTF_8))).reduce(hllMonoid.plus).map(hll => "key" -> hll)
   val hllStateDStream = hllDStream.updateStateByKey[HLL](accumulateMonoid[HLL] _)
-  val exactHLLDStream = lines.map(id => id -> Set(id))
+  val exactHLLDStream = lines.map(id => Set(id)).reduce(_ union _).map(idSet => "key" -> idSet)
   val exactHLLStateDStream = exactHLLDStream.updateStateByKey[Set[String]](accumulateMonoid[Set[String]] _)
-
-  exactHLLStateDStream.map(m => m._2).reduce(_ union _).foreachRDD(rdd => {
+  val joinedHLLStream = hllStateDStream.join(exactHLLStateDStream)
+  joinedHLLStream.foreachRDD(rdd => {
     if (rdd.count() != 0) {
-      val partial = rdd.first()
-      val exactSize = partial.size
-      println(s"Exact Set Number (user_count): $exactSize\n")
+      val hllSet = rdd.first()._2
+      val hll = hllSet._1
+      val set = hllSet._2
+      val approxSize = hll.estimatedSize.toInt
+      val exactSize = set.size
+      val error = (approxSize - exactSize).abs.toDouble / exactSize.toDouble * 100
+      println(f"HyperLogLog Set approxSize (user_count): ${approxSize}%d," +
+        f" Exact Set Number (user_count): $exactSize%d," +
+        f" (error): $error%.2f%%\n\n===\n")
     }
   })
 
-  hllStateDStream.map(m => m._2).reduce(hllMonoid.plus).foreachRDD(rdd => {
-    if (rdd.count() != 0) {
-      val partial = rdd.first()
-      val approxSize = partial.estimatedSize.toLong
-      println(s"HyperLogLog Set approxSize (user_count): $approxSize\n\n===\n")
-    }
-  })
   hllStateDStream.checkpoint(Seconds(12))
   exactHLLStateDStream.checkpoint(Seconds(12))
+  joinedHLLStream.checkpoint(Seconds(12))
   ssc.start()
   ssc.awaitTermination()
 }
