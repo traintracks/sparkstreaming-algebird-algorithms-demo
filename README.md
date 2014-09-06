@@ -25,7 +25,7 @@ sparkstreaming-algebird-algorithms-demo
     
 ## Starting SparkMeetupDemo
 
-Our SparkMeetupDemo will run the HyperLogLog algorithm and Count-Min Skech both with one passing Spark Streaming.
+Our SparkMeetupDemo will run the HyperLogLog algorithm and Count-Min Sketch both in one pass with Spark Streaming.
 It'll receive messages from Kafka's topic called _sparkmeetup_
 
     sbt "run-main io.traintracks.demo.spark.streaming.algebird.SparkMeetupDemo" > SparkMeetupDemo.log
