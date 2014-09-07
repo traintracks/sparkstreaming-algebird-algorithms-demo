@@ -14,12 +14,12 @@ object KafkaLogProducer extends App {
 
   val config = new ProducerConfig(props)
   val producer = new Producer[String, String](config)
-  val messagesBatchSize = 100
-  val topic = "sparkmeetup"
+  val messagesBatchSize = 5
+  val topic = "demotopic"
 
   while (true) {
     val messages = (1 to messagesBatchSize).map { messageNum =>
-      val randomId = scala.util.Random.nextInt(1000).abs
+      val randomId = scala.util.Random.nextInt(100).abs
       val str = randomId.toString
       new KeyedMessage[String, String](topic, str)
     }.toArray
